@@ -53,9 +53,10 @@ def getMetaDataForSurgeries(surgery_type):
         b = line.split()
         surgery_name = b[0]
         expertise_level = b[1]
-        b = b[2:]
-        scores = [int(e) for e in b]
-        surgeries_metadata[surgery_name] = (expertise_level, scores)
+        # b = b[2:]
+        # scores = [int(e) for e in b]
+        # surgeries_metadata[surgery_name] = (expertise_level, scores)
+        surgeries_metadata[surgery_name] =  expertise_level
     return surgeries_metadata
 
 
@@ -89,7 +90,8 @@ def readFile(file_name, dtype, columns_to_use=None):
 
 def generateMaps(surgery_type):
     # path = root_dir + surgery_type + '_kinematic' + '/kinematics/AllGestures/'
-    path = root_dir + surgery_type + '/kinematics/AllGestures/'
+    # path = root_dir + surgery_type + '/kinematics/AllGestures/'
+    path = root_dir + surgery_type +'/log_data/'
     for subdir, dirs, files in os.walk(path):
         for file_name in files:
             surgery = readFile(path + file_name, float, columns_to_use=dimensions_to_use)
@@ -99,7 +101,7 @@ def generateMaps(surgery_type):
                 continue
             mapSurgeryDataBySurgeryName[surgery_name] = surgery
             mapExpertiseLevelBySurgeryName[surgery_name] = expertise_level
-            generateGesturesForSurgery(surgery_name, surgery_type)
+            # generateGesturesForSurgery(surgery_name, surgery_type)
     return None
 
 
@@ -114,7 +116,7 @@ def save_evaluation(out_dir, macro, micro, precision, macro_std, precision_std, 
     df['val_loss'] = val_loss
     df.to_csv(out_dir + 'df_metrics.csv', index=False)
 
-
+# not use
 def generateGesturesForSurgery(surgery_name, surgery_type):
     surgery = mapSurgeryDataBySurgeryName[surgery_name]
     # path = root_dir + surgery_type + '_kinematic/transcriptions/'
@@ -143,7 +145,7 @@ def shuffle(x_train, y_train):
     return x_y_train[:, 0], x_y_train[:, 1].tolist()
 
 
-def validation(surgery_type='Suturing', balanced='Balanced', shuff=True,
+def validation(surgery_type, balanced='Balanced', shuff=True,
                classification='GestureClassification', validation='SuperTrialOut',
                levelClassify=False, val_split=False):
     # levelClassify is used to do a validation on Novic - Intermediate - Expert
@@ -195,10 +197,10 @@ def validation(surgery_type='Suturing', balanced='Balanced', shuff=True,
             # end of one file Train or Test
             if (len(files) > 0):
 
-                x_train = np.array(x_train)
-                x_test = np.array(x_test)
+                x_train = np.array(x_train,dtype=object)
+                x_test = np.array(x_test, dtype=object)
                 if val_split:
-                    x_val = np.array(x_val)
+                    x_val = np.array(x_val, dtype=object)
 
                 fit_encoder(y_train, y_test, y_val)
 
@@ -227,9 +229,9 @@ def validation(surgery_type='Suturing', balanced='Balanced', shuff=True,
 
                     keras.backend.clear_session()
 
-                    build_model = fcn_each_dim_build_model
+                    build_model = modified_fcn_each_dim_build_model
 
-                    model = build_model(input_shapes, filters, kernel_size, lr, amsgrad, summary=False, reg=reg)
+                    model = build_model(input_shapes, filters, kernel_size, lr, amsgrad, summary=True, reg=reg)
 
                     # save init parameters
                     model.save(out_dir + 'model_init.hdf5')
@@ -342,9 +344,10 @@ def cas(idx_to_explain=0):
     # idx_to_explain corresponds to the id of the class to explain
     generateMaps(surgery_type)
 
-    model = keras.models.load_model('model-calssification-example.h5')
+    # model = keras.models.load_model('model-calssification-example.h5')
+    model = keras.models.load_model('../results/oil_classification/OIL_DATA/Experimental_setup/Eyelog/unBalanced/GestureClassification/SuperTrialOut/8_Out/itr_1/architecture__fcn/reg__1e-05/lr__0.001/filters__8/kernel_size__3/amsgrad__0/model_best.hdf5')
 
-    surgery_name = surgery_type + '_E002'
+    surgery_name = surgery_type + '_A005'
 
     time_series_original = mapSurgeryDataBySurgeryName[surgery_name]
 
@@ -363,7 +366,7 @@ def cas(idx_to_explain=0):
 
     print("predicted_label:" + str(np.argmax(predicted)))
 
-    cas = np.zeros(dtype=np.float, shape=(conv_out.shape[1]))
+    cas = np.zeros(dtype=float, shape=(conv_out.shape[1]))
 
     conv_out = conv_out[0, :, :]
 
@@ -380,13 +383,14 @@ def cas(idx_to_explain=0):
     cas = cas * 100
     cas = cas.astype(int)
 
-    x_master_left = time_series_original[:, 0]
-    y_master_left = time_series_original[:, 1]
-    z_master_left = time_series_original[:, 2]
+    # modify these values to present an appropriate color map
+    x_head = time_series_original[:, 2]
+    y_head = time_series_original[:, 3]
+    z_head = time_series_original[:, 4]
 
     fig = plt.figure()
     plot3d = fig.add_subplot(111, projection='3d')
-    pltmap = plot3d.scatter(x_master_left, y_master_left, z_master_left,
+    pltmap = plot3d.scatter(x_head, y_head, z_head,
                             c=cas, cmap='jet', s=5, linewidths=0)
     ax = plt.gca()
     ax.set_xticklabels([])
@@ -471,16 +475,54 @@ def fcn_each_dim_build_model(input_shapes, filters, kernel_size, lr, amsgrad, su
     # choose the optimizer(エラーが出たので、改変)
     # optimizer = keras.optimizers.Adam(lr=lr, amsgrad=amsgrad)
     import tensorflow as tf
+    optimizer=tf.keras.optimizers.Adam(learning_rater=lr,amsgrad=amsgrad)
+
+    model.compile(loss='categorical_crossentropy', optimizer=optimizer, metrics=['accuracy'])
+
+    return model
+
+def modified_fcn_each_dim_build_model(input_shapes, filters, kernel_size, lr, amsgrad, summary=False, reg=0.01):
+    # num_hands=1,num_dim_clusters=2
+    # get number of hands
+    num_hands = len(input_shapes)
+    # get number of dimensions cluster for each hand
+    num_dim_clusters = len(input_shapes[0])
+
+    x = [None for a in range(0, num_dim_clusters)]
+    conv1=[None for a in range(0, num_dim_clusters)]
+    for i in range(0,num_dim_clusters):
+        x[i]=keras.layers.Input(input_shapes[0][i])
+        conv1[i] = keras.layers.Conv1D(filters=filters, kernel_size=kernel_size, strides=1, padding='same',
+                                              activity_regularizer=regularizers.l2(reg))(x[i])
+        conv1[i] = keras.layers.Activation('relu')(conv1[i])
+    final_input=keras.layers.Concatenate(axis=-1)(conv1)
+    conv2 = keras.layers.Conv1D(filters=4 * filters, kernel_size=kernel_size, strides=1, padding='same',
+                                activity_regularizer=regularizers.l2(reg))(final_input)
+    conv2 = keras.layers.Activation('relu', name="conv_final")(conv2)
+
+    # do a globla average pooling of the final convolution
+    pooled = keras.layers.GlobalAveragePooling1D()(conv2)
+    # add the final softmax classifier layer
+    out = keras.layers.Dense(nb_classes, activation='softmax')(pooled)
+    # create the model and link input to output
+    model = Model(inputs=x, outputs=out)
+    # show summary if specified
+    if summary == True:
+        model.summary()
+
+    # choose the optimizer(エラーが出たので、改変)
+    # optimizer = keras.optimizers.Adam(lr=lr, amsgrad=amsgrad)
+    import tensorflow as tf
     optimizer=tf.keras.optimizers.Adam(lr=lr,amsgrad=amsgrad)
 
     model.compile(loss='categorical_crossentropy', optimizer=optimizer, metrics=['accuracy'])
 
     return model
 
-
 def results(validation='SuperTrialOut'):
     # s_types = ['Suturing', 'Knot_Tying', 'Needle_Passing']
-    s_types = ['Suturing']
+    # s_types = ['Suturing']
+    s_types = ['Eyelog']
 
     metrics = ['micro', 'macro']
 
@@ -498,7 +540,7 @@ def results(validation='SuperTrialOut'):
     # for surg in surgery_types:
     for surg in s_types:
         curr_df['surgery_type'] = surg
-        dir_out_surgery = out_root_dir + 'JIGSAWS/Experimental_setup/' + surg \
+        dir_out_surgery = out_root_dir + 'OIL_DATA/Experimental_setup/' + surg \
                           + '/unBalanced/GestureClassification/' + validation + '/'
         # ファイル作成
         if not (os.path.exists(dir_out_surgery)):
@@ -541,26 +583,30 @@ def results(validation='SuperTrialOut'):
 
     df_res.to_csv(out_root_dir + validation + '-results.csv')
 
+# from surgery, Surgery to log, Log
 
 # time
 start_time = time.time()
 
 # Global parameters
-root_dir = '../JIGSAWS/'
-path_to_configurations = '../JIGSAWS/Experimental_setup/'
-out_root_dir = '../results/classification/'
-nb_epochs = 1000
+root_dir = '../OIL_DATA/'
+path_to_configurations = '../OIL_DATA/Experimental_setup/'
+out_root_dir = '../results/oil_classification/'
+nb_epochs = 100
 max_iterations = 1
-dimensions_to_use = range(0, 76)
+# dimensions_to_use = range(0, 76)
+dimensions_to_use = range(0,5)
 mapSurgeryDataBySurgeryName = collections.OrderedDict()  # indexes surgery data (76 dimensions) by surgery name
 mapExpertiseLevelBySurgeryName = collections.OrderedDict()  # indexes exerptise level by surgery name
-mapGesturesBySurgeryName = collections.OrderedDict()  # indexes gestures of a surgery by its name
-input_shapes = [[(None, 3), (None, 9), (None, 3), (None, 3), (None, 1)],
-                [(None, 3), (None, 9), (None, 3), (None, 3), (None, 1)],
-                [(None, 3), (None, 9), (None, 3), (None, 3), (None, 1)],
-                [(None, 3), (None, 9), (None, 3), (None, 3), (None, 1)]]
+# mapGesturesBySurgeryName = collections.OrderedDict()  # indexes gestures of a surgery by its name
+# input_shapes = [[(None, 3), (None, 9), (None, 3), (None, 3), (None, 1)],
+#                 [(None, 3), (None, 9), (None, 3), (None, 3), (None, 1)],
+#                 [(None, 3), (None, 9), (None, 3), (None, 3), (None, 1)],
+#                 [(None, 3), (None, 9), (None, 3), (None, 3), (None, 1)]]
+input_shapes = [[(None, 2), (None, 3)]]
 # surgery_types = ['Suturing','Knot_Tying','Needle_Passing']
-surgery_types = ['Suturing']
+# surgery_types = ['Suturing']
+surgery_types=['Eyelog']
 
 
 if (len(sys.argv) > 1):
@@ -590,10 +636,11 @@ else:
         amsgrads = [0]
         ###############
 
-        classes = ['N', 'I', 'E']
+        # classes = ['N', 'I', 'E']
+        classes = ['N', 'E']
         nb_classes = len(classes)
         confusion_matrix = pd.DataFrame(np.zeros(shape=(nb_classes, nb_classes)), index=classes,
-                                        columns=classes)  # matrix used to calculate the JIGSAWS evaluation
+                                        columns=classes)  # matrix used to calculate the OIL_DATA evaluation
         encoder = LabelEncoder()  # used to transform labels into binary one hot vectors
 
         surgeries_metadata = getMetaDataForSurgeries(surgery_type)
@@ -601,6 +648,6 @@ else:
         generateMaps(surgery_type)
 
         validation(surgery_type, balanced='unBalanced', validation='SuperTrialOut',
-                   levelClassify=True, shuff=True)
+                   levelClassify=True, shuff=True, val_split=True)
 
         print("End!")
