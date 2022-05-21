@@ -16,6 +16,7 @@ import math
 import matplotlib
 from mpl_toolkits.mplot3d import Axes3D
 import sys
+from fastprogress import master_bar, progress_bar
 
 matplotlib.use('pdf')
 import matplotlib.pyplot as plt
@@ -145,7 +146,7 @@ def shuffle(x_train, y_train):
 
 def validation(surgery_type='Suturing', balanced='Balanced', shuff=True,
                classification='GestureClassification', validation='SuperTrialOut',
-               levelClassify=False, val_split=False):
+               levelClassify=False, val_split=True):
     # levelClassify is used to do a validation on Novic - Intermediate - Expert
     path = path_to_configurations + surgery_type + '/' + balanced + '/' + classification + '/' + validation
     for it in range(1):
@@ -220,10 +221,10 @@ def validation(surgery_type='Suturing', balanced='Balanced', shuff=True,
                               + 'kernel_size__' + str(kernel_size) + '/' \
                               + 'amsgrad__' + str(amsgrad) + '/'
 
-                    test_dir = create_dir(out_dir)
-                    if (test_dir is None):
-                        itrr = itrr - 1
-                        continue
+                    # test_dir = create_dir(out_dir)
+                    # if (test_dir is None):
+                    #     itrr = itrr - 1
+                    #     continue
 
                     keras.backend.clear_session()
 
@@ -278,6 +279,13 @@ def fitModel(model, x_train, y_train, x_test, y_test, x_val, y_val, out_dir, shu
     epochs_loss = "train_loss,test_loss\n"
     # minimum epoch loss on val set
     min_val_loss = -1
+    # 学習曲線描画のための前準備
+    mb = master_bar(range(nb_epochs))
+    train_costs_lst = []
+    valid_costs_lst = []
+    x_bounds = [0, nb_epochs]
+    y_bounds = None
+    y_upper_bound=None
     # train for many epochs as specified by nb_epochs
     for epoch in range(0, nb_epochs):
         # shuffle before every epoch training
@@ -309,6 +317,26 @@ def fitModel(model, x_train, y_train, x_test, y_test, x_val, y_val, out_dir, shu
 
         epochs_loss += str(epoch_train_loss) + ',' + str(epoch_val_loss) + '\n'
 
+        # 損失関数の値の計算
+        train_costs_mean = np.mean(epoch_train_loss)
+        valid_costs_mean = np.mean(epoch_val_loss)
+        train_costs_lst.append(train_costs_mean)
+        valid_costs_lst.append(valid_costs_mean)
+
+        # learning curveの図示
+        if y_bounds is None:
+            # 1エポック目のみ実行
+            y_bounds = [0, train_costs_mean *
+                        1.1 if y_upper_bound is None else y_upper_bound]
+
+        t = np.arange(len(train_costs_lst))
+        graphs = [[t, train_costs_lst], [t, valid_costs_lst]]
+        mb.update_graph(graphs, x_bounds, y_bounds)
+
+        # 学習過程の出力
+        mb.write('EPOCH: {0:02d}, Training cost: {1:10.5f}, Validation cost: {2:10.5f}'.format(
+            epoch+1, train_costs_mean, valid_costs_mean))
+
     return epochs_loss, y_test_binary, min_val_loss
 
 
@@ -321,7 +349,8 @@ def evaluate_for_epoch(model, x_test, y_test):
 
 
 def evaluateModel(model, x_test, y_test_binary):
-    confusion_matrix_f = pd.DataFrame(np.zeros(shape=(nb_classes, nb_classes)), index=classes, columns=classes)
+    # confusion_matrix_f = pd.DataFrame(np.zeros(shape=(nb_classes, nb_classes)), index=classes, columns=classes)
+    confusion_matrix_f = pd.DataFrame(np.zeros(shape=(nb_classes, nb_classes)), index=list(map(lambda str:'pred_'+str,classes)), columns=list(map(lambda str:'true_'+str,classes)))
 
     for test, label in zip(x_test, y_test_binary):
         model.evaluate(split_input_for_training(test), label.reshape(1, nb_classes), verbose=0)
@@ -330,8 +359,9 @@ def evaluateModel(model, x_test, y_test_binary):
         predicted_label = encoder.inverse_transform([predicted_integer_label])[0]
         correct_label = encoder.inverse_transform([np.argmax(label)])[0]
         confusion_matrix[correct_label][predicted_label] += 1.0
-        confusion_matrix_f[correct_label][predicted_label] += 1.0
+        confusion_matrix_f['true_'+correct_label]['pred_'+predicted_label] += 1.0
 
+    # print(confusion_matrix_f)
     matrix_f = confusion_matrix_f.values
     macro = compute_macro(matrix_f)
     return (macro, compute_micro(matrix_f), compute_precision(matrix_f)
@@ -549,7 +579,7 @@ start_time = time.time()
 root_dir = '../JIGSAWS/'
 path_to_configurations = '../JIGSAWS/Experimental_setup/'
 out_root_dir = '../results/classification/'
-nb_epochs = 1000
+nb_epochs = 10
 max_iterations = 1
 dimensions_to_use = range(0, 76)
 mapSurgeryDataBySurgeryName = collections.OrderedDict()  # indexes surgery data (76 dimensions) by surgery name

@@ -16,6 +16,7 @@ import math
 import matplotlib
 from mpl_toolkits.mplot3d import Axes3D
 import sys
+from fastprogress import master_bar, progress_bar
 
 matplotlib.use('pdf')
 import matplotlib.pyplot as plt
@@ -122,16 +123,19 @@ def generateGesturesForSurgery(surgery_name, surgery_type):
     # path = root_dir + surgery_type + '_kinematic/transcriptions/'
     path = root_dir + surgery_type + '/transcriptions/'
     file_name = surgery_name + '.txt'
-    data = readFile(path + file_name, str)
-    gestures = []
+    if file_name == 'Eyelog_C001.txt':
+        pass
+    else:
+        data = readFile(path + file_name, str)
+        gestures = []
 
-    for row in data:
-        start_index = int(row[0]) - 1
-        end_index = int(row[1])
-        gesture_name = row[2]
-        gestures.append((gesture_name, surgery[start_index:end_index], start_index, end_index))
+        for row in data:
+            start_index = int(row[0]) - 1
+            end_index = int(row[1])
+            gesture_name = row[2]
+            gestures.append((gesture_name, surgery[start_index:end_index], start_index, end_index))
 
-    mapGesturesBySurgeryName[surgery_name] = gestures
+        mapGesturesBySurgeryName[surgery_name] = gestures
     return True
 
 
@@ -147,7 +151,7 @@ def shuffle(x_train, y_train):
 
 def validation(surgery_type, balanced='Balanced', shuff=True,
                classification='GestureClassification', validation='SuperTrialOut',
-               levelClassify=False, val_split=False):
+               levelClassify=False, val_split=True):
     # levelClassify is used to do a validation on Novic - Intermediate - Expert
     path = path_to_configurations + surgery_type + '/' + balanced + '/' + classification + '/' + validation
     for it in range(1):
@@ -173,6 +177,8 @@ def validation(surgery_type, balanced='Balanced', shuff=True,
 
                 for surgery_name in surgeries_set:
                     user_name, trial_num = get_user_name_and_trial_num(surgery_name, surgery_type)
+                    if (user_name, trial_num) == ('B','2'):
+                        continue
                     if file_name == 'Train.txt':
                         if (user_added_to_val is None):
                             user_added_to_val = user_name
@@ -222,16 +228,16 @@ def validation(surgery_type, balanced='Balanced', shuff=True,
                               + 'kernel_size__' + str(kernel_size) + '/' \
                               + 'amsgrad__' + str(amsgrad) + '/'
 
-                    test_dir = create_dir(out_dir)
-                    if (test_dir is None):
-                        itrr = itrr - 1
-                        continue
+                    # test_dir = create_dir(out_dir)
+                    # if (test_dir is None):
+                    #     itrr = itrr - 1
+                    #     continue
 
                     keras.backend.clear_session()
 
                     build_model = modified_fcn_each_dim_build_model
 
-                    model = build_model(input_shapes, filters, kernel_size, lr, amsgrad, summary=True, reg=reg)
+                    model = build_model(input_shapes, filters, kernel_size, lr, amsgrad, summary=False, reg=reg)
 
                     # save init parameters
                     model.save(out_dir + 'model_init.hdf5')
@@ -242,10 +248,14 @@ def validation(surgery_type, balanced='Balanced', shuff=True,
 
                     model = load_model(out_dir + 'model_best.hdf5')
 
-                    # evaluate model and get results for confusion matrix
-                    (macro, micro, precision, macro_std, precision_std) = evaluateModel(model, x_test, y_test_binary)
-                    save_evaluation(out_dir, macro, micro, precision, macro_std, precision_std, val_loss)
+                    print('subdir:'+''.join(map(str,subdir))+' dirs:'+''.join(map(str,dirs))+' files:'+''.join(map(str,files)))
+                    evaluateModel(model, x_test, y_test_binary)
 
+                    # evaluate model and get results for confusion matrix
+                    # (macro, micro, precision, macro_std, precision_std) = evaluateModel(model, x_test, y_test_binary)
+                    # save_evaluation(out_dir, macro, micro, precision, macro_std, precision_std, val_loss)
+                break
+            
 
 def find_pattern(word, pattern):
     return re.search(r'' + pattern, word).group(0)
@@ -275,13 +285,21 @@ def compute_precision(matrix):
     return np.nansum(res) / float(nb_classes)
 
 
-def fitModel(model, x_train, y_train, x_test, y_test, x_val, y_val, out_dir, shuff=True, val_split=False):
+def fitModel(model, x_train, y_train, x_test, y_test, x_val, y_val, out_dir, shuff=True, val_split=True):
     # x_test and y_test are used to monitor the overfitting / underfitting not for training
     epochs_loss = "train_loss,test_loss\n"
     # minimum epoch loss on val set
     min_val_loss = -1
+    # 学習曲線描画のための前準備
+    mb = master_bar(range(nb_epochs))
+    train_costs_lst = []
+    valid_costs_lst = []
+    x_bounds = [0, nb_epochs]
+    y_bounds = None
+    y_upper_bound=None
     # train for many epochs as specified by nb_epochs
-    for epoch in range(0, nb_epochs):
+    # for epoch in range(0, nb_epochs):
+    for epoch in mb:
         # shuffle before every epoch training
         if (shuff == True):
             x_train, y_train = shuffle(x_train, y_train)
@@ -290,9 +308,15 @@ def fitModel(model, x_train, y_train, x_test, y_test, x_val, y_val, out_dir, shu
         # train each sequence alone
         epoch_train_loss = 0
         epoch_val_loss = 0
-        for sequence, label in zip(x_train, y_train_binary):
-            loss, acc = model.train_on_batch(split_input_for_training(sequence), label.reshape(1, nb_classes))
+        train_num=0
+        for _ in progress_bar(range(len(x_train)), parent=mb):
+            loss, acc = model.train_on_batch(split_input_for_training(x_train[train_num]), y_train_binary[train_num].reshape(1, nb_classes))
             epoch_train_loss += loss  ################# change if monitor acc instead of loss
+            train_num+=1
+
+        # for sequence, label in zip(x_train, y_train_binary):
+        #     loss, acc = model.train_on_batch(split_input_for_training(sequence), label.reshape(1, nb_classes))
+        #     epoch_train_loss += loss  ################# change if monitor acc instead of loss
 
         epoch_train_loss = epoch_train_loss / len(x_train)
         if val_split:
@@ -310,6 +334,26 @@ def fitModel(model, x_train, y_train, x_test, y_test, x_val, y_val, out_dir, shu
         model.save(out_dir + 'model_curr.hdf5')
 
         epochs_loss += str(epoch_train_loss) + ',' + str(epoch_val_loss) + '\n'
+        
+        # 損失関数の値の計算
+        train_costs_mean = np.mean(epoch_train_loss)
+        valid_costs_mean = np.mean(epoch_val_loss)
+        train_costs_lst.append(train_costs_mean)
+        valid_costs_lst.append(valid_costs_mean)
+
+        # learning curveの図示
+        if y_bounds is None:
+            # 1エポック目のみ実行
+            y_bounds = [0, train_costs_mean *
+                        1.1 if y_upper_bound is None else y_upper_bound]
+
+        t = np.arange(len(train_costs_lst))
+        graphs = [[t, train_costs_lst], [t, valid_costs_lst]]
+        mb.update_graph(graphs, x_bounds, y_bounds)
+
+        # 学習過程の出力
+        mb.write('EPOCH: {0:02d}, Training cost: {1:10.5f}, Validation cost: {2:10.5f}'.format(
+            epoch+1, train_costs_mean, valid_costs_mean))
 
     return epochs_loss, y_test_binary, min_val_loss
 
@@ -323,7 +367,7 @@ def evaluate_for_epoch(model, x_test, y_test):
 
 
 def evaluateModel(model, x_test, y_test_binary):
-    confusion_matrix_f = pd.DataFrame(np.zeros(shape=(nb_classes, nb_classes)), index=classes, columns=classes)
+    confusion_matrix_f = pd.DataFrame(np.zeros(shape=(nb_classes, nb_classes)), index=list(map(lambda str:'pred_'+str,classes)), columns=list(map(lambda str:'true_'+str,classes)))
 
     for test, label in zip(x_test, y_test_binary):
         model.evaluate(split_input_for_training(test), label.reshape(1, nb_classes), verbose=0)
@@ -331,13 +375,15 @@ def evaluateModel(model, x_test, y_test_binary):
         predicted_integer_label = np.argmax(p).astype(int)
         predicted_label = encoder.inverse_transform([predicted_integer_label])[0]
         correct_label = encoder.inverse_transform([np.argmax(label)])[0]
-        confusion_matrix[correct_label][predicted_label] += 1.0
-        confusion_matrix_f[correct_label][predicted_label] += 1.0
+        confusion_matrix['true_'+correct_label]['pred_'+predicted_label] += 1.0
+        confusion_matrix_f['true_'+correct_label]['pred_'+predicted_label] += 1.0
 
-    matrix_f = confusion_matrix_f.values
-    macro = compute_macro(matrix_f)
-    return (macro, compute_micro(matrix_f), compute_precision(matrix_f)
-            , compute_macro_std(macro, matrix_f), compute_precision_std(macro, matrix_f))
+    print(confusion_matrix_f)
+
+    # matrix_f = confusion_matrix_f.values
+    # macro = compute_macro(matrix_f)
+    # return (macro, compute_micro(matrix_f), compute_precision(matrix_f)
+    #         , compute_macro_std(macro, matrix_f), compute_precision_std(macro, matrix_f))
 
 
 def cas(idx_to_explain=0):
@@ -345,9 +391,9 @@ def cas(idx_to_explain=0):
     generateMaps(surgery_type)
 
     # model = keras.models.load_model('model-calssification-example.h5')
-    model = keras.models.load_model('../results/oil_classification/OIL_DATA/Experimental_setup/Eyelog/unBalanced/GestureClassification/SuperTrialOut/8_Out/itr_1/architecture__fcn/reg__1e-05/lr__0.001/filters__8/kernel_size__3/amsgrad__0/model_best.hdf5')
+    model = keras.models.load_model('../results/oil_classification/OIL_DATA/Experimental_setup/Eyelog/unBalanced/GestureClassification/SuperTrialOut/7_Out/itr_1/architecture__fcn/reg__1e-05/lr__0.0005/filters__8/kernel_size__3/amsgrad__0/model_best.hdf5')
 
-    surgery_name = surgery_type + '_A005'
+    surgery_name = surgery_type + '_E005'
 
     time_series_original = mapSurgeryDataBySurgeryName[surgery_name]
 
@@ -475,7 +521,7 @@ def fcn_each_dim_build_model(input_shapes, filters, kernel_size, lr, amsgrad, su
     # choose the optimizer(エラーが出たので、改変)
     # optimizer = keras.optimizers.Adam(lr=lr, amsgrad=amsgrad)
     import tensorflow as tf
-    optimizer=tf.keras.optimizers.Adam(learning_rater=lr,amsgrad=amsgrad)
+    optimizer=tf.keras.optimizers.Adam(learning_rate=lr,amsgrad=amsgrad)
 
     model.compile(loss='categorical_crossentropy', optimizer=optimizer, metrics=['accuracy'])
 
@@ -496,14 +542,19 @@ def modified_fcn_each_dim_build_model(input_shapes, filters, kernel_size, lr, am
                                               activity_regularizer=regularizers.l2(reg))(x[i])
         conv1[i] = keras.layers.Activation('relu')(conv1[i])
     final_input=keras.layers.Concatenate(axis=-1)(conv1)
-    conv2 = keras.layers.Conv1D(filters=4 * filters, kernel_size=kernel_size, strides=1, padding='same',
+    conv2 = keras.layers.Conv1D(filters=2 * filters, kernel_size=kernel_size, strides=1, padding='same',
                                 activity_regularizer=regularizers.l2(reg))(final_input)
     conv2 = keras.layers.Activation('relu', name="conv_final")(conv2)
 
+    # pool2= keras.layers.MaxPooling1D(pool_size=2)(conv2)
+
+    # conv3 = keras.layers.Conv1D(filters=4 * filters, kernel_size=kernel_size, strides=1, padding='same',
+    #                             activity_regularizer=regularizers.l2(reg))(pool2)
+    # conv3 = keras.layers.Activation('relu', name="conv_3")(conv3)
     # do a globla average pooling of the final convolution
     pooled = keras.layers.GlobalAveragePooling1D()(conv2)
     # add the final softmax classifier layer
-    out = keras.layers.Dense(nb_classes, activation='softmax')(pooled)
+    out = keras.layers.Dense(nb_classes, activation='sigmoid')(pooled)
     # create the model and link input to output
     model = Model(inputs=x, outputs=out)
     # show summary if specified
@@ -515,7 +566,7 @@ def modified_fcn_each_dim_build_model(input_shapes, filters, kernel_size, lr, am
     import tensorflow as tf
     optimizer=tf.keras.optimizers.Adam(lr=lr,amsgrad=amsgrad)
 
-    model.compile(loss='categorical_crossentropy', optimizer=optimizer, metrics=['accuracy'])
+    model.compile(loss='binary_crossentropy', optimizer=optimizer, metrics=['accuracy'])
 
     return model
 
@@ -592,13 +643,13 @@ start_time = time.time()
 root_dir = '../OIL_DATA/'
 path_to_configurations = '../OIL_DATA/Experimental_setup/'
 out_root_dir = '../results/oil_classification/'
-nb_epochs = 100
+nb_epochs = 1000
 max_iterations = 1
 # dimensions_to_use = range(0, 76)
 dimensions_to_use = range(0,5)
 mapSurgeryDataBySurgeryName = collections.OrderedDict()  # indexes surgery data (76 dimensions) by surgery name
 mapExpertiseLevelBySurgeryName = collections.OrderedDict()  # indexes exerptise level by surgery name
-# mapGesturesBySurgeryName = collections.OrderedDict()  # indexes gestures of a surgery by its name
+mapGesturesBySurgeryName = collections.OrderedDict()  # indexes gestures of a surgery by its name
 # input_shapes = [[(None, 3), (None, 9), (None, 3), (None, 3), (None, 1)],
 #                 [(None, 3), (None, 9), (None, 3), (None, 3), (None, 1)],
 #                 [(None, 3), (None, 9), (None, 3), (None, 3), (None, 1)],
@@ -632,15 +683,15 @@ else:
         regs = [0.00001]
         filterss = [8]
         kernel_sizes = [3]
-        lrs = [0.001]
+        lrs = [0.0005]
         amsgrads = [0]
         ###############
 
         # classes = ['N', 'I', 'E']
         classes = ['N', 'E']
         nb_classes = len(classes)
-        confusion_matrix = pd.DataFrame(np.zeros(shape=(nb_classes, nb_classes)), index=classes,
-                                        columns=classes)  # matrix used to calculate the OIL_DATA evaluation
+        confusion_matrix = pd.DataFrame(np.zeros(shape=(nb_classes, nb_classes)),
+                     index=list(map(lambda str:'pred_'+str,classes)), columns=list(map(lambda str:'true_'+str,classes)))  # matrix used to calculate the OIL_DATA evaluation
         encoder = LabelEncoder()  # used to transform labels into binary one hot vectors
 
         surgeries_metadata = getMetaDataForSurgeries(surgery_type)
@@ -650,4 +701,6 @@ else:
         validation(surgery_type, balanced='unBalanced', validation='SuperTrialOut',
                    levelClassify=True, shuff=True, val_split=True)
 
+        print('confusion_matrix:')
+        print(confusion_matrix)
         print("End!")
