@@ -18,8 +18,8 @@ from mpl_toolkits.mplot3d import Axes3D
 import sys
 from fastprogress import master_bar, progress_bar
 
-matplotlib.use('pdf')
 import matplotlib.pyplot as plt
+matplotlib.use('pdf')
 
 
 def create_dir(out_dir):
@@ -123,7 +123,7 @@ def generateGesturesForSurgery(surgery_name, surgery_type):
     # path = root_dir + surgery_type + '_kinematic/transcriptions/'
     path = root_dir + surgery_type + '/transcriptions/'
     file_name = surgery_name + '.txt'
-    if file_name == 'Eyelog_C001.txt':
+    if file_name == 'Eyelog_B002.txt':
         pass
     else:
         data = readFile(path + file_name, str)
@@ -242,7 +242,7 @@ def validation(surgery_type, balanced='Balanced', shuff=True,
                     # save init parameters
                     model.save(out_dir + 'model_init.hdf5')
 
-                    epochs_loss, y_test_binary, val_loss = fitModel(model, x_train, y_train,
+                    epochs_loss, y_test_binary, val_loss = fitModel_acc(model, x_train, y_train,
                                                                     x_test, y_test, x_val,
                                                                     y_val, out_dir, shuff=shuff, val_split=val_split)
 
@@ -284,8 +284,7 @@ def compute_precision(matrix):
     res = matrix.diagonal() / np.sum(matrix, axis=0)
     return np.nansum(res) / float(nb_classes)
 
-
-def fitModel(model, x_train, y_train, x_test, y_test, x_val, y_val, out_dir, shuff=True, val_split=True):
+def fitModel_loss(model, x_train, y_train, x_test, y_test, x_val, y_val, out_dir, shuff=True, val_split=True):
     # x_test and y_test are used to monitor the overfitting / underfitting not for training
     epochs_loss = "train_loss,test_loss\n"
     # minimum epoch loss on val set
@@ -294,6 +293,7 @@ def fitModel(model, x_train, y_train, x_test, y_test, x_val, y_val, out_dir, shu
     mb = master_bar(range(nb_epochs))
     train_costs_lst = []
     valid_costs_lst = []
+    test_costs_lst=[]
     x_bounds = [0, nb_epochs]
     y_bounds = None
     y_upper_bound=None
@@ -319,6 +319,8 @@ def fitModel(model, x_train, y_train, x_test, y_test, x_val, y_val, out_dir, shu
         #     epoch_train_loss += loss  ################# change if monitor acc instead of loss
 
         epoch_train_loss = epoch_train_loss / len(x_train)
+        epoch_test_loss=evaluate_for_epoch(model, x_test, y_test_binary)
+
         if val_split:
             epoch_val_loss = evaluate_for_epoch(model, x_val, y_val_binary)
             if (epoch_val_loss < min_val_loss or min_val_loss == -1):
@@ -333,13 +335,15 @@ def fitModel(model, x_train, y_train, x_test, y_test, x_val, y_val, out_dir, shu
 
         model.save(out_dir + 'model_curr.hdf5')
 
-        epochs_loss += str(epoch_train_loss) + ',' + str(epoch_val_loss) + '\n'
-        
+        epochs_loss += str(epoch_train_loss) + ',' + str(epoch_test_loss) + '\n'
+
         # 損失関数の値の計算
         train_costs_mean = np.mean(epoch_train_loss)
         valid_costs_mean = np.mean(epoch_val_loss)
+        test_costs_mean = np.mean(epoch_test_loss)
         train_costs_lst.append(train_costs_mean)
         valid_costs_lst.append(valid_costs_mean)
+        test_costs_lst.append(test_costs_mean)
 
         # learning curveの図示
         if y_bounds is None:
@@ -347,13 +351,87 @@ def fitModel(model, x_train, y_train, x_test, y_test, x_val, y_val, out_dir, shu
             y_bounds = [0, train_costs_mean *
                         1.1 if y_upper_bound is None else y_upper_bound]
 
+
         t = np.arange(len(train_costs_lst))
-        graphs = [[t, train_costs_lst], [t, valid_costs_lst]]
+        graphs = [[t, train_costs_lst], [t, test_costs_lst]]
         mb.update_graph(graphs, x_bounds, y_bounds)
 
         # 学習過程の出力
-        mb.write('EPOCH: {0:02d}, Training cost: {1:10.5f}, Validation cost: {2:10.5f}'.format(
-            epoch+1, train_costs_mean, valid_costs_mean))
+        # mb.write('EPOCH: {0:02d}, Training cost: {1:10.5f}, Validation cost: {2:10.5f}'.format(
+        #     epoch+1, train_costs_mean, valid_costs_mean))
+
+    return epochs_loss, y_test_binary, min_val_loss
+
+def fitModel_acc(model, x_train, y_train, x_test, y_test, x_val, y_val, out_dir, shuff=True, val_split=True):
+    # x_test and y_test are used to monitor the overfitting / underfitting not for training
+    epochs_loss = "train_loss,test_loss\n"
+    # minimum epoch loss on val set
+    min_val_loss = -1
+    min_val_acc=0
+    # 学習曲線描画のための前準備
+    mb = master_bar(range(nb_epochs))
+    # train_costs_lst = []
+    # valid_costs_lst = []
+    train_accs_lst=[]
+    test_accs_lst=[]
+    x_bounds = [0, nb_epochs]
+    y_bounds=[0,1]
+    y_bounds2 = None
+    y_upper_bound2=None
+    # train for many epochs as specified by nb_epochs
+    # for epoch in range(0, nb_epochs):
+    for epoch in mb:
+        # shuffle before every epoch training
+        if (shuff == True):
+            x_train, y_train = shuffle(x_train, y_train)
+        # convert string labels to binary forms
+        y_train_binary, y_test_binary, y_val_binary = convertStringClassesToBinaryClasses(y_train, y_test, y_val)
+        # train each sequence alone
+        epoch_train_loss = 0
+        # epoch_val_loss = 0
+        epoch_train_acc=0
+        ecpoch_val_acc=0
+        train_num=0
+        for _ in progress_bar(range(len(x_train)), parent=mb):
+            loss, acc = model.train_on_batch(split_input_for_training(x_train[train_num]), y_train_binary[train_num].reshape(1, nb_classes))
+            # epoch_train_loss += loss  ################# change if monitor acc instead of loss
+            epoch_train_acc+=acc
+            train_num+=1
+
+        # for sequence, label in zip(x_train, y_train_binary):
+        #     loss, acc = model.train_on_batch(split_input_for_training(sequence), label.reshape(1, nb_classes))
+        #     epoch_train_loss += loss  ################# change if monitor acc instead of loss
+
+        # epoch_train_loss = epoch_train_loss / len(x_train)
+        epoch_train_acc = epoch_train_acc / len(x_train)
+        epoch_test_acc=evaluate_for_epoch(model, x_test, y_test_binary)
+
+        if val_split:
+            epoch_val_loss = evaluate_for_epoch(model, x_val, y_val_binary)
+            # ecpo_val_acc=evaluate_for_epoch(model,x_val,y_val_binary)
+            if (epoch_val_loss < min_val_loss or min_val_loss == -1):
+                # this is to choose finally the model that yields the best results on the validation set
+                model.save(out_dir + 'model_best.hdf5')
+                min_val_loss = epoch_val_loss
+        else:  # we evaluate on the train
+            if (epoch_test_acc > min_val_acc or min_val_acc == -1):
+                # this is to choose finally the model that yields the best results on the validation set
+                model.save(out_dir + 'model_best.hdf5')
+                min_val_loss = epoch_train_loss
+
+        model.save(out_dir + 'model_curr.hdf5')
+
+        # calculate acc
+        train_accs_lst.append(epoch_train_acc)
+        test_accs_lst.append(epoch_test_acc)
+        
+        t=np.arange(len(train_accs_lst))
+        graphs = [[t, train_accs_lst], [t, test_accs_lst]]
+        mb.update_graph(graphs, x_bounds, y_bounds)
+
+        # 学習過程の出力
+        # mb.write('EPOCH: {0:02d}, Training cost: {1:10.5f}, Validation cost: {2:10.5f}'.format(
+        #     epoch+1, train_costs_mean, valid_costs_mean))
 
     return epochs_loss, y_test_binary, min_val_loss
 
@@ -519,9 +597,9 @@ def fcn_each_dim_build_model(input_shapes, filters, kernel_size, lr, amsgrad, su
         model.summary()
 
     # choose the optimizer(エラーが出たので、改変)
-    # optimizer = keras.optimizers.Adam(lr=lr, amsgrad=amsgrad)
-    import tensorflow as tf
-    optimizer=tf.keras.optimizers.Adam(learning_rate=lr,amsgrad=amsgrad)
+    optimizer = keras.optimizers.Adam(lr=lr, amsgrad=amsgrad)
+    # import tensorflow as tf
+    # optimizer=tf.keras.optimizers.Adam(learning_rate=lr,amsgrad=amsgrad)
 
     model.compile(loss='categorical_crossentropy', optimizer=optimizer, metrics=['accuracy'])
 
@@ -536,23 +614,27 @@ def modified_fcn_each_dim_build_model(input_shapes, filters, kernel_size, lr, am
 
     x = [None for a in range(0, num_dim_clusters)]
     conv1=[None for a in range(0, num_dim_clusters)]
+    bn1=[None for a in range(0, num_dim_clusters)]
     for i in range(0,num_dim_clusters):
         x[i]=keras.layers.Input(input_shapes[0][i])
         conv1[i] = keras.layers.Conv1D(filters=filters, kernel_size=kernel_size, strides=1, padding='same',
                                               activity_regularizer=regularizers.l2(reg))(x[i])
-        conv1[i] = keras.layers.Activation('relu')(conv1[i])
+        bn1[i]=keras.layers.normalization.BatchNormalization()(conv1[i])
+        conv1[i] = keras.layers.Activation('relu')(bn1[i])
     final_input=keras.layers.Concatenate(axis=-1)(conv1)
     conv2 = keras.layers.Conv1D(filters=2 * filters, kernel_size=kernel_size, strides=1, padding='same',
                                 activity_regularizer=regularizers.l2(reg))(final_input)
-    conv2 = keras.layers.Activation('relu', name="conv_final")(conv2)
+    bn2=keras.layers.normalization.BatchNormalization()(conv2)
+    conv2 = keras.layers.Activation('relu', name="conv_final")(bn2)
 
     # pool2= keras.layers.MaxPooling1D(pool_size=2)(conv2)
 
-    # conv3 = keras.layers.Conv1D(filters=4 * filters, kernel_size=kernel_size, strides=1, padding='same',
-    #                             activity_regularizer=regularizers.l2(reg))(pool2)
-    # conv3 = keras.layers.Activation('relu', name="conv_3")(conv3)
+    conv3 = keras.layers.Conv1D(filters=filters, kernel_size=kernel_size, strides=1, padding='same',
+                                activity_regularizer=regularizers.l2(reg))(conv2)
+    bn3=keras.layers.normalization.BatchNormalization()(conv3)
+    conv3 = keras.layers.Activation('relu', name="conv_3")(conv3)
     # do a globla average pooling of the final convolution
-    pooled = keras.layers.GlobalAveragePooling1D()(conv2)
+    pooled = keras.layers.GlobalAveragePooling1D()(conv3)
     # add the final softmax classifier layer
     out = keras.layers.Dense(nb_classes, activation='sigmoid')(pooled)
     # create the model and link input to output
@@ -562,9 +644,9 @@ def modified_fcn_each_dim_build_model(input_shapes, filters, kernel_size, lr, am
         model.summary()
 
     # choose the optimizer(エラーが出たので、改変)
-    # optimizer = keras.optimizers.Adam(lr=lr, amsgrad=amsgrad)
-    import tensorflow as tf
-    optimizer=tf.keras.optimizers.Adam(lr=lr,amsgrad=amsgrad)
+    optimizer = keras.optimizers.Adam(lr=lr, amsgrad=amsgrad)
+    # import tensorflow as tf
+    # optimizer=tf.keras.optimizers.Adam(lr=lr,amsgrad=amsgrad)
 
     model.compile(loss='binary_crossentropy', optimizer=optimizer, metrics=['accuracy'])
 
@@ -646,7 +728,7 @@ out_root_dir = '../results/oil_classification/'
 nb_epochs = 1000
 max_iterations = 1
 # dimensions_to_use = range(0, 76)
-dimensions_to_use = range(0,5)
+dimensions_to_use = range(0,8)
 mapSurgeryDataBySurgeryName = collections.OrderedDict()  # indexes surgery data (76 dimensions) by surgery name
 mapExpertiseLevelBySurgeryName = collections.OrderedDict()  # indexes exerptise level by surgery name
 mapGesturesBySurgeryName = collections.OrderedDict()  # indexes gestures of a surgery by its name
@@ -654,7 +736,7 @@ mapGesturesBySurgeryName = collections.OrderedDict()  # indexes gestures of a su
 #                 [(None, 3), (None, 9), (None, 3), (None, 3), (None, 1)],
 #                 [(None, 3), (None, 9), (None, 3), (None, 3), (None, 1)],
 #                 [(None, 3), (None, 9), (None, 3), (None, 3), (None, 1)]]
-input_shapes = [[(None, 2), (None, 3)]]
+input_shapes = [[(None, 2), (None, 3), (None, 3)]]
 # surgery_types = ['Suturing','Knot_Tying','Needle_Passing']
 # surgery_types = ['Suturing']
 surgery_types=['Eyelog']
@@ -681,7 +763,7 @@ else:
         #### hyperparam
         architectures = ['fcn']
         regs = [0.00001]
-        filterss = [8]
+        filterss = [128]
         kernel_sizes = [3]
         lrs = [0.0005]
         amsgrads = [0]
@@ -699,7 +781,7 @@ else:
         generateMaps(surgery_type)
 
         validation(surgery_type, balanced='unBalanced', validation='SuperTrialOut',
-                   levelClassify=True, shuff=True, val_split=True)
+                   levelClassify=True, shuff=True, val_split=False)
 
         print('confusion_matrix:')
         print(confusion_matrix)

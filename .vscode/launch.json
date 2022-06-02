@@ -5,6 +5,17 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Python: Current File2",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "cwd": "${fileDirname}",
+            "python.pythonPath":"/usr/local/bin/python",
+            // "env": { "PYTHONPATH": "${PYTHONPATH}:/workspaces/ijcars19-master/"}
+        },
+        {
             "name": "Python: Current File",
             "type": "python",
             "request": "launch",
@@ -13,7 +24,7 @@
             "justMyCode": true,
             "cwd": "${fileDirname}",
             // "args": ["results"],
-            "args": ["cas"],
+            // "args": ["cas"],
         }
     ]
 }
