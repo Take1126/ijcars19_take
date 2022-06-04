@@ -2,6 +2,8 @@ import numpy as np
 import random
 import time
 from itertools import chain
+from keras.layers import Conv1D, BatchNormalization, GlobalAveragePooling1D, Permute, Dropout, Flatten
+from keras.layers import Input, Dense, LSTM, CuDNNLSTM, Concatenate, Activation, GRU, SimpleRNN
 from keras.models import Model
 from keras.utils import np_utils
 import keras
@@ -21,6 +23,8 @@ from fastprogress import master_bar, progress_bar
 import matplotlib.pyplot as plt
 matplotlib.use('pdf')
 
+from utils.keras_utils import train_model, evaluate_model
+from utils.layer_utils import AttentionLSTM
 
 def create_dir(out_dir):
     if os.path.exists(out_dir):
@@ -200,61 +204,69 @@ def validation(surgery_type, balanced='Balanced', shuff=True,
                             min_length_test = min(len(mapSurgeryDataBySurgeryName[surgery_name]), min_length_test)
                             x_test.append(mapSurgeryDataBySurgeryName[surgery_name])
                             y_test.append(mapExpertiseLevelBySurgeryName[surgery_name])
+                            test_out=os.path.basename(os.path.dirname(subdir))
             # end of one file Train or Test
             if (len(files) > 0):
+                if test_out == '':
+                    continue
+                else:
+                    x_train = np.array(x_train,dtype=object)
+                    x_test = np.array(x_test, dtype=object)
+                    if val_split:
+                        x_val = np.array(x_val, dtype=object)
 
-                x_train = np.array(x_train,dtype=object)
-                x_test = np.array(x_test, dtype=object)
-                if val_split:
-                    x_val = np.array(x_val, dtype=object)
+                    fit_encoder(y_train, y_test, y_val)
 
-                fit_encoder(y_train, y_test, y_val)
+                    for itrr in range(max_iterations):
+                        print('trial_out_num:'+test_out)
 
-                for itrr in range(max_iterations):
+                        # get the hyperparameters
+                        architecture = random.choice(architectures)
+                        reg = random.choice(regs)
+                        lr = random.choice(lrs)
+                        filters = int(random.choice(filterss))
+                        kernel_size = int(random.choice(kernel_sizes))
+                        amsgrad = random.choice(amsgrads)
 
-                    # get the hyperparameters
-                    architecture = random.choice(architectures)
-                    reg = random.choice(regs)
-                    lr = random.choice(lrs)
-                    filters = int(random.choice(filterss))
-                    kernel_size = int(random.choice(kernel_sizes))
-                    amsgrad = random.choice(amsgrads)
+                        out_dir = out_root_dir + subdir[3:] + '/' \
+                                + 'architecture__' + architecture + '/' \
+                                + 'reg__' + str(reg) + '/' \
+                                + 'lr__' + str(lr) + '/' \
+                                + 'filters__' + str(filters) + '/' \
+                                + 'kernel_size__' + str(kernel_size) + '/' \
+                                + 'amsgrad__' + str(amsgrad) + '/'
 
-                    out_dir = out_root_dir + subdir[3:] + '/' \
-                              + 'architecture__' + architecture + '/' \
-                              + 'reg__' + str(reg) + '/' \
-                              + 'lr__' + str(lr) + '/' \
-                              + 'filters__' + str(filters) + '/' \
-                              + 'kernel_size__' + str(kernel_size) + '/' \
-                              + 'amsgrad__' + str(amsgrad) + '/'
+                        test_dir = create_dir(out_dir)
+                        # if (test_dir is None):
+                        #     itrr = itrr - 1
+                        #     continue
 
-                    # test_dir = create_dir(out_dir)
-                    # if (test_dir is None):
-                    #     itrr = itrr - 1
-                    #     continue
+                        keras.backend.clear_session()
 
-                    keras.backend.clear_session()
+                        build_model = modified_fcn_each_dim_build_model
+                        # build_model=attention_lstm_fcn_each_dim_build_model
 
-                    build_model = modified_fcn_each_dim_build_model
+                        model = build_model(input_shapes, filters, kernel_size, lr, amsgrad, summary=True, reg=reg)
 
-                    model = build_model(input_shapes, filters, kernel_size, lr, amsgrad, summary=False, reg=reg)
+                        # save init parameters
+                        model.save(out_dir + 'model_init.hdf5')
 
-                    # save init parameters
-                    model.save(out_dir + 'model_init.hdf5')
+                        # epochs_loss, y_test_binary, val_loss = fitModel_acc(model, x_train, y_train,
+                        #                                                 x_test, y_test, x_val,
+                        #                                                 y_val, out_dir, shuff=shuff, val_split=val_split)
+                        
+                        epochs_loss, y_test_binary, val_loss = fitModel_loss(model, x_train, y_train,
+                                                                        x_test, y_test, x_val,
+                                                                        y_val, out_dir, shuff=shuff, val_split=val_split)
 
-                    epochs_loss, y_test_binary, val_loss = fitModel_acc(model, x_train, y_train,
-                                                                    x_test, y_test, x_val,
-                                                                    y_val, out_dir, shuff=shuff, val_split=val_split)
+                        model = load_model(out_dir + 'model_best.hdf5')
 
-                    model = load_model(out_dir + 'model_best.hdf5')
+                        evaluateModel(model, x_test, y_test_binary)
 
-                    print('subdir:'+''.join(map(str,subdir))+' dirs:'+''.join(map(str,dirs))+' files:'+''.join(map(str,files)))
-                    evaluateModel(model, x_test, y_test_binary)
-
-                    # evaluate model and get results for confusion matrix
-                    # (macro, micro, precision, macro_std, precision_std) = evaluateModel(model, x_test, y_test_binary)
-                    # save_evaluation(out_dir, macro, micro, precision, macro_std, precision_std, val_loss)
-                break
+                        # evaluate model and get results for confusion matrix
+                        # (macro, micro, precision, macro_std, precision_std) = evaluateModel(model, x_test, y_test_binary)
+                        # save_evaluation(out_dir, macro, micro, precision, macro_std, precision_std, val_loss)
+                # break
             
 
 def find_pattern(word, pattern):
@@ -328,27 +340,28 @@ def fitModel_loss(model, x_train, y_train, x_test, y_test, x_val, y_val, out_dir
                 model.save(out_dir + 'model_best.hdf5')
                 min_val_loss = epoch_val_loss
         else:  # we evaluate on the train
-            if (epoch_train_loss < min_val_loss or min_val_loss == -1):
+            # if (epoch_train_loss < min_val_loss or min_val_loss == -1):
+            #     # this is to choose finally the model that yields the best results on the validation set
+            #     model.save(out_dir + 'model_best.hdf5')
+            #     min_val_loss = epoch_train_loss
+            if (epoch_test_loss < min_val_loss or min_val_loss == -1):
                 # this is to choose finally the model that yields the best results on the validation set
                 model.save(out_dir + 'model_best.hdf5')
-                min_val_loss = epoch_train_loss
+                min_val_loss = epoch_test_loss
 
         model.save(out_dir + 'model_curr.hdf5')
 
         epochs_loss += str(epoch_train_loss) + ',' + str(epoch_test_loss) + '\n'
 
         # 損失関数の値の計算
-        train_costs_mean = np.mean(epoch_train_loss)
-        valid_costs_mean = np.mean(epoch_val_loss)
-        test_costs_mean = np.mean(epoch_test_loss)
-        train_costs_lst.append(train_costs_mean)
-        valid_costs_lst.append(valid_costs_mean)
-        test_costs_lst.append(test_costs_mean)
+        train_costs_lst.append(epoch_train_loss)
+        # valid_costs_lst.append(epoch_val_loss)
+        test_costs_lst.append(epoch_test_loss)
 
         # learning curveの図示
         if y_bounds is None:
             # 1エポック目のみ実行
-            y_bounds = [0, train_costs_mean *
+            y_bounds = [0, epoch_train_loss *
                         1.1 if y_upper_bound is None else y_upper_bound]
 
 
@@ -430,8 +443,8 @@ def fitModel_acc(model, x_train, y_train, x_test, y_test, x_val, y_val, out_dir,
         mb.update_graph(graphs, x_bounds, y_bounds)
 
         # 学習過程の出力
-        # mb.write('EPOCH: {0:02d}, Training cost: {1:10.5f}, Validation cost: {2:10.5f}'.format(
-        #     epoch+1, train_costs_mean, valid_costs_mean))
+        mb.write('EPOCH: {0:02d}, Training cost: {1:10.5f}, Validation cost: {2:10.5f}'.format(
+            epoch+1, epoch_train_acc, epoch_test_acc))
 
     return epochs_loss, y_test_binary, min_val_loss
 
@@ -569,27 +582,27 @@ def fcn_each_dim_build_model(input_shapes, filters, kernel_size, lr, amsgrad, su
         # loop for each hand over the dimension (or channels) clusters
         for j in range(0, num_dim_clusters):
             # input layer for each dimension cluster for each hand
-            x[i][j] = keras.layers.Input(input_shapes[i][j])
+            x[i][j] = Input(input_shapes[i][j])
             # first conv layer over the clustered dimensions or channels in terms of keras
-            conv1[i][j] = keras.layers.Conv1D(filters=filters, kernel_size=kernel_size, strides=1, padding='same',
+            conv1[i][j] = Conv1D(filters=filters, kernel_size=kernel_size, strides=1, padding='same',
                                               activity_regularizer=regularizers.l2(reg))(x[i][j])
-            conv1[i][j] = keras.layers.Activation('relu')(conv1[i][j])
+            conv1[i][j] = Activation('relu')(conv1[i][j])
         # concatenate convolutions of first layer over the channels dimension for each hand
-        hand_layers[i] = keras.layers.Concatenate(axis=-1)(conv1[i])
+        hand_layers[i] = Concatenate(axis=-1)(conv1[i])
         # do a second convolution over features extracted from the first convolution over each hand
-        conv2[i] = keras.layers.Conv1D(filters=2 * filters, kernel_size=kernel_size, strides=1, padding='same',
+        conv2[i] = Conv1D(filters=2 * filters, kernel_size=kernel_size, strides=1, padding='same',
                                        activity_regularizer=regularizers.l2(reg))(hand_layers[i])
-        conv2[i] = keras.layers.Activation('relu')(conv2[i])
+        conv2[i] = Activation('relu')(conv2[i])
     # concatenate the features of the two hands
-    final_input = keras.layers.Concatenate(axis=-1)(conv2)
+    final_input = Concatenate(axis=-1)(conv2)
     # do a final convolution over the features concatenated for all hands
-    conv3 = keras.layers.Conv1D(filters=4 * filters, kernel_size=kernel_size, strides=1, padding='same',
+    conv3 = Conv1D(filters=4 * filters, kernel_size=kernel_size, strides=1, padding='same',
                                 activity_regularizer=regularizers.l2(reg))(final_input)
-    conv3 = keras.layers.Activation('relu', name="conv_final")(conv3)
+    conv3 = Activation('relu', name="conv_final")(conv3)
     # do a globla average pooling of the final convolution
-    pooled = keras.layers.GlobalAveragePooling1D()(conv3)
+    pooled = GlobalAveragePooling1D()(conv3)
     # add the final softmax classifier layer
-    out = keras.layers.Dense(nb_classes, activation='softmax')(pooled)
+    out = Dense(nb_classes, activation='softmax')(pooled)
     # create the model and link input to output
     model = Model(inputs=list(chain.from_iterable(x)), outputs=out)
     # show summary if specified
@@ -615,30 +628,104 @@ def modified_fcn_each_dim_build_model(input_shapes, filters, kernel_size, lr, am
     x = [None for a in range(0, num_dim_clusters)]
     conv1=[None for a in range(0, num_dim_clusters)]
     bn1=[None for a in range(0, num_dim_clusters)]
+    drop1=[None for a in range(0, num_dim_clusters)]
+
+    # for i in range(0,num_dim_clusters):
+    #     x[i]=keras.layers.Input(input_shapes[0][i])
+    #     conv1[i] = Conv1D(filters=filters, kernel_size=kernel_size, strides=1, padding='same',
+    #                                           activity_regularizer=regularizers.l2(reg))(x[i])
+    #     bn1[i]=keras.layers.normalization.BatchNormalization()(conv1[i])
+    #     conv1[i] = Activation('relu')(bn1[i])
+    #     drop1[i] = Dropout(0.5)(conv1[i])
+    # final_input=keras.layers.Concatenate(axis=-1)(drop1)
+    # conv2 = Conv1D(filters=2 * filters, kernel_size=kernel_size, strides=1, padding='same',
+    #                             activity_regularizer=regularizers.l2(reg))(final_input)
+    # bn2=keras.layers.normalization.BatchNormalization()(conv2)
+    # conv2 = Activation('relu', name="conv_final")(bn2)
+    # drop2 = Dropout(0.5)(conv2)
+
+
     for i in range(0,num_dim_clusters):
         x[i]=keras.layers.Input(input_shapes[0][i])
-        conv1[i] = keras.layers.Conv1D(filters=filters, kernel_size=kernel_size, strides=1, padding='same',
+        conv1[i] = Conv1D(filters=filters, kernel_size=kernel_size, strides=1, padding='same',
                                               activity_regularizer=regularizers.l2(reg))(x[i])
         bn1[i]=keras.layers.normalization.BatchNormalization()(conv1[i])
-        conv1[i] = keras.layers.Activation('relu')(bn1[i])
+        conv1[i] = Activation('relu')(bn1[i])
+        # drop1[i] = Dropout(0.5)(conv1[i])
     final_input=keras.layers.Concatenate(axis=-1)(conv1)
-    conv2 = keras.layers.Conv1D(filters=2 * filters, kernel_size=kernel_size, strides=1, padding='same',
+    conv2 = Conv1D(filters=2 * filters, kernel_size=kernel_size, strides=1, padding='same',
                                 activity_regularizer=regularizers.l2(reg))(final_input)
-    bn2=keras.layers.normalization.BatchNormalization()(conv2)
-    conv2 = keras.layers.Activation('relu', name="conv_final")(bn2)
+    # bn2=keras.layers.normalization.BatchNormalization()(conv2)
+    conv2 = Activation('relu', name="conv_final")(conv2)
 
-    # pool2= keras.layers.MaxPooling1D(pool_size=2)(conv2)
 
-    conv3 = keras.layers.Conv1D(filters=filters, kernel_size=kernel_size, strides=1, padding='same',
-                                activity_regularizer=regularizers.l2(reg))(conv2)
-    bn3=keras.layers.normalization.BatchNormalization()(conv3)
-    conv3 = keras.layers.Activation('relu', name="conv_3")(conv3)
     # do a globla average pooling of the final convolution
-    pooled = keras.layers.GlobalAveragePooling1D()(conv3)
+    pooled = GlobalAveragePooling1D()(conv2)
     # add the final softmax classifier layer
-    out = keras.layers.Dense(nb_classes, activation='sigmoid')(pooled)
+    out = Dense(nb_classes, activation='sigmoid')(pooled)
     # create the model and link input to output
     model = Model(inputs=x, outputs=out)
+    # show summary if specified
+    if summary == True:
+        model.summary()
+
+    # choose the optimizer(エラーが出たので、改変)
+    optimizer = keras.optimizers.Adam(lr=lr, amsgrad=amsgrad)
+    # import tensorflow as tf
+    # optimizer=tf.keras.optimizers.Adam(lr=lr,amsgrad=amsgrad)
+
+    model.compile(loss='binary_crossentropy', optimizer=optimizer, metrics=['accuracy'])
+
+    return model
+
+def attention_lstm_fcn_each_dim_build_model(input_shapes, filters, kernel_size, lr, amsgrad, summary=True, reg=0.01):
+    # num_hands=1,num_dim_clusters=2
+    # get number of hands
+    num_hands = len(input_shapes)
+    # get number of dimensions cluster for each hand
+    num_dim_clusters = len(input_shapes[0])
+
+    ip = [None for a in range(0, num_dim_clusters)]
+    x=[None for a in range(0, num_dim_clusters)]
+    y=[None for a in range(0, num_dim_clusters)]
+    
+    for i in range(0,num_dim_clusters):
+        ip[i] = Input(input_shapes[0][i])
+        x[i] = Conv1D(filters=filters, kernel_size=8, kernel_initializer='he_uniform', strides=1, padding='same',
+                                              activity_regularizer=regularizers.l2(reg))(ip[i])
+        x[i] = BatchNormalization()(x[i])
+        x[i] = Activation('relu')(x[i])
+
+        y[i]=AttentionLSTM(8)(ip[i])
+        y[i]=Dropout(0.8)(y[i])
+
+    # GPUでも遅ければ、LSTMの論文を参考に次元シャッフル検討
+    # y_ip = Concatenate(axis=-1)(ip)
+    # y=Permute((2,1))(y_ip)
+    # y=AttentionLSTM(8)(y)
+    # y=Dropout(0.8)(y)
+    
+    X = Concatenate(axis=-1)(x)
+    Y = Concatenate(axis=-1)(y)
+    X = Conv1D(filters=2 * filters, kernel_size=5, kernel_initializer='he_uniform', strides=1, padding='same',
+                                activity_regularizer=regularizers.l2(reg))(X)
+    X = BatchNormalization()(X)
+    X = Activation('relu', name="conv_final")(X)
+
+    # pool2= MaxPooling1D(pool_size=2)(conv2)
+
+    final_input = Conv1D(filters=filters, kernel_size=3, kernel_initializer='he_uniform', strides=1, padding='same',
+                                activity_regularizer=regularizers.l2(reg))(X)
+    X = BatchNormalization()(final_input)
+    X = Activation('relu', name="conv_3")(X)
+    # do a globla average pooling of the final convolution
+    X = GlobalAveragePooling1D()(X)
+
+    X=Concatenate(axis=-1)([X, Y])
+    # add the final softmax classifier layer
+    out = Dense(nb_classes, activation='softmax')(X)
+    # create the model and link input to output
+    model = Model(inputs=ip, outputs=out)
     # show summary if specified
     if summary == True:
         model.summary()
@@ -725,10 +812,9 @@ start_time = time.time()
 root_dir = '../OIL_DATA/'
 path_to_configurations = '../OIL_DATA/Experimental_setup/'
 out_root_dir = '../results/oil_classification/'
-nb_epochs = 1000
+nb_epochs = 10000
 max_iterations = 1
 # dimensions_to_use = range(0, 76)
-dimensions_to_use = range(0,8)
 mapSurgeryDataBySurgeryName = collections.OrderedDict()  # indexes surgery data (76 dimensions) by surgery name
 mapExpertiseLevelBySurgeryName = collections.OrderedDict()  # indexes exerptise level by surgery name
 mapGesturesBySurgeryName = collections.OrderedDict()  # indexes gestures of a surgery by its name
@@ -736,7 +822,13 @@ mapGesturesBySurgeryName = collections.OrderedDict()  # indexes gestures of a su
 #                 [(None, 3), (None, 9), (None, 3), (None, 3), (None, 1)],
 #                 [(None, 3), (None, 9), (None, 3), (None, 3), (None, 1)],
 #                 [(None, 3), (None, 9), (None, 3), (None, 3), (None, 1)]]
-input_shapes = [[(None, 2), (None, 3), (None, 3)]]
+input_shapes = [[(None, 2), (None, 3),
+                 (None, 3),
+                 (None, 1), (None, 3), (None, 3),
+                 (None, 6),
+                 ]]
+dimensions_to_use = range(0, 21)
+print('dimensions_to_use=21')
 # surgery_types = ['Suturing','Knot_Tying','Needle_Passing']
 # surgery_types = ['Suturing']
 surgery_types=['Eyelog']
@@ -763,9 +855,10 @@ else:
         #### hyperparam
         architectures = ['fcn']
         regs = [0.00001]
-        filterss = [128]
+        filterss = [8]
+        # filterss=[8]
         kernel_sizes = [3]
-        lrs = [0.0005]
+        lrs = [0.001]
         amsgrads = [0]
         ###############
 

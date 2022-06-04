@@ -499,9 +499,9 @@ def fcn_each_dim_build_model(input_shapes, filters, kernel_size, lr, amsgrad, su
         model.summary()
 
     # choose the optimizer(エラーが出たので、改変)
-    # optimizer = keras.optimizers.Adam(lr=lr, amsgrad=amsgrad)
-    import tensorflow as tf
-    optimizer=tf.keras.optimizers.Adam(lr=lr,amsgrad=amsgrad)
+    optimizer = keras.optimizers.Adam(lr=lr, amsgrad=amsgrad)
+    # import tensorflow as tf
+    # optimizer=tf.keras.optimizers.Adam(lr=lr,amsgrad=amsgrad)
 
     model.compile(loss='categorical_crossentropy', optimizer=optimizer, metrics=['accuracy'])
 
