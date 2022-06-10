@@ -13,8 +13,10 @@ import warnings
 
 from keras.models import Model
 from keras.layers import Permute
-from keras.optimizers import Adam
-from keras.utils import to_categorical
+# from keras.optimizers import Adam
+# from keras.utils import to_categorical
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.utils import to_categorical
 from keras.preprocessing.sequence import pad_sequences
 from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau, LearningRateScheduler
 from keras.wrappers.scikit_learn import KerasClassifier

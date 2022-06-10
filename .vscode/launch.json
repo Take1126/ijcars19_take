@@ -16,10 +16,11 @@
             // "env": { "PYTHONPATH": "${PYTHONPATH}:/workspaces/ijcars19-master/"}
         },
         {
-            "name": "Python: Current File",
+            "name": "Python: oil_class",
             "type": "python",
             "request": "launch",
-            "program": "${file}",
+            // "program": "${file}",
+            "program": "oil_classification.py",
             "console": "integratedTerminal",
             "justMyCode": true,
             "cwd": "${fileDirname}",

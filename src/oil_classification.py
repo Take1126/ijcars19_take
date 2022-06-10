@@ -16,6 +16,7 @@ import collections
 import re
 import math
 import matplotlib
+from matplotlib.backends.backend_pdf import PdfPages
 from mpl_toolkits.mplot3d import Axes3D
 import sys
 from fastprogress import master_bar, progress_bar
@@ -417,7 +418,7 @@ def fitModel_acc(model, x_train, y_train, x_test, y_test, x_val, y_val, out_dir,
 
         # epoch_train_loss = epoch_train_loss / len(x_train)
         epoch_train_acc = epoch_train_acc / len(x_train)
-        epoch_test_acc=evaluate_for_epoch(model, x_test, y_test_binary)
+        epoch_test_acc=evaluate_acc_for_epoch(model, x_test, y_test_binary)
 
         if val_split:
             epoch_val_loss = evaluate_for_epoch(model, x_val, y_val_binary)
@@ -442,9 +443,9 @@ def fitModel_acc(model, x_train, y_train, x_test, y_test, x_val, y_val, out_dir,
         graphs = [[t, train_accs_lst], [t, test_accs_lst]]
         mb.update_graph(graphs, x_bounds, y_bounds)
 
-        # 学習過程の出力
-        mb.write('EPOCH: {0:02d}, Training cost: {1:10.5f}, Validation cost: {2:10.5f}'.format(
-            epoch+1, epoch_train_acc, epoch_test_acc))
+        # # 学習過程の出力
+        # mb.write('EPOCH: {0:02d}, Training cost: {1:10.5f}, Validation cost: {2:10.5f}'.format(
+        #     epoch+1, epoch_train_acc, epoch_test_acc))
 
     return epochs_loss, y_test_binary, min_val_loss
 
@@ -455,6 +456,13 @@ def evaluate_for_epoch(model, x_test, y_test):
         loss, acc = model.evaluate(split_input_for_training(test), label.reshape(1, nb_classes), verbose=0)
         epoch_test_loss += loss  ############### change if monitor loss instead of accuracy
     return epoch_test_loss / len(x_test)
+
+def evaluate_acc_for_epoch(model, x_test, y_test):
+    epoch_test_acc = 0
+    for test, label in zip(x_test, y_test):
+        loss, acc = model.evaluate(split_input_for_training(test), label.reshape(1, nb_classes), verbose=0)
+        epoch_test_acc += acc  ############### change if monitor loss instead of accuracy
+    return epoch_test_acc / len(x_test)
 
 
 def evaluateModel(model, x_test, y_test_binary):
@@ -481,66 +489,85 @@ def cas(idx_to_explain=0):
     # idx_to_explain corresponds to the id of the class to explain
     generateMaps(surgery_type)
 
-    # model = keras.models.load_model('model-calssification-example.h5')
-    model = keras.models.load_model('../results/oil_classification/OIL_DATA/Experimental_setup/Eyelog/unBalanced/GestureClassification/SuperTrialOut/7_Out/itr_1/architecture__fcn/reg__1e-05/lr__0.0005/filters__8/kernel_size__3/amsgrad__0/model_best.hdf5')
+    model = keras.models.load_model('../results/oil_classification/OIL_DATA/Experimental_setup/Eyelog/unBalanced/GestureClassification/SuperTrialOut/7_Out/itr_1/architecture__fcn/reg__1e-05/lr__0.001/filters__8/kernel_size__3/amsgrad__0/model_best.hdf5')
+    
+    if idx_to_explain==0:
+        # expert explanation
+        subjects=['A','F','G']
+    elif idx_to_explain==1:
+        # novice explanation
+        subjects=['D','E','I']
+    # subjects=['A','D','E','F','G','I']
+    for subject in subjects:
+        pp=PdfPages(out_root_dir + subject +'_level'+mapExpertiseLevelBySurgeryName[surgery_type+'_'+subject+'000']+ '.pdf')
+        for try_num in range(10):
+            surgery_name = surgery_type + '_'+subject+'00'+str(try_num)
 
-    surgery_name = surgery_type + '_E005'
+            time_series_original = mapSurgeryDataBySurgeryName[surgery_name]
 
-    time_series_original = mapSurgeryDataBySurgeryName[surgery_name]
+            w_k_c = model.layers[-1].get_weights()[0]  # weights for each filter k for each class c
 
-    w_k_c = model.layers[-1].get_weights()[0]  # weights for each filter k for each class c
+            new_input_layer = model.inputs  # same input of the original model
 
-    new_input_layer = model.inputs  # same input of the original model
+            new_outpu_layer = [model.get_layer("conv_final").output,
+                            model.layers[-1].output]  # output is both the original as well as the before last layer
 
-    new_outpu_layer = [model.get_layer("conv_final").output,
-                       model.layers[-1].output]  # output is both the original as well as the before last layer
+            new_function = keras.backend.function(new_input_layer, new_outpu_layer)
 
-    new_function = keras.backend.function(new_input_layer, new_outpu_layer)
+            new_feed_forward = new_function
 
-    new_feed_forward = new_function
+            [conv_out, predicted] = new_feed_forward(split_input_for_training(time_series_original))
 
-    [conv_out, predicted] = new_feed_forward(split_input_for_training(time_series_original))
+            print('subject:'+subject+' '+'try_num:'+str(try_num))
+            print('true_label:'+mapExpertiseLevelBySurgeryName[surgery_type+'_'+subject+'00'+str(try_num)])
+            print("predicted_label:" + classes[not np.argmax(predicted)])
 
-    print("predicted_label:" + str(np.argmax(predicted)))
+            cas = np.zeros(dtype=float, shape=(conv_out.shape[1]))
 
-    cas = np.zeros(dtype=float, shape=(conv_out.shape[1]))
+            conv_out = conv_out[0, :, :]
 
-    conv_out = conv_out[0, :, :]
+            for k, w in enumerate(w_k_c[:, idx_to_explain]):
+                cas += w * conv_out[:, k]
 
-    for k, w in enumerate(w_k_c[:, idx_to_explain]):
-        cas += w * conv_out[:, k]
+            minimum = np.min(cas)
+            if minimum < 0:
+                cas = cas + abs(minimum)
+            else:
+                cas = cas - minimum
 
-    minimum = np.min(cas)
-    if minimum < 0:
-        cas = cas + abs(minimum)
-    else:
-        cas = cas - minimum
+            cas = cas / max(cas)
+            cas = cas * 100
+            cas = cas.astype(int)
 
-    cas = cas / max(cas)
-    cas = cas * 100
-    cas = cas.astype(int)
+            # modify these values to present an appropriate color map
+            x_head = time_series_original[:, 2]
+            z_head = time_series_original[:, 3]
+            y_head = time_series_original[:, 4]
 
-    # modify these values to present an appropriate color map
-    x_head = time_series_original[:, 2]
-    y_head = time_series_original[:, 3]
-    z_head = time_series_original[:, 4]
-
-    fig = plt.figure()
-    plot3d = fig.add_subplot(111, projection='3d')
-    pltmap = plot3d.scatter(x_head, y_head, z_head,
-                            c=cas, cmap='jet', s=5, linewidths=0)
-    ax = plt.gca()
-    ax.set_xticklabels([])
-    ax.set_yticklabels([])
-    ax.set_zticklabels([])
-    ax.w_xaxis.set_pane_color((1.0, 1.0, 1.0, 1.0))
-    ax.w_yaxis.set_pane_color((1.0, 1.0, 1.0, 1.0))
-    ax.w_zaxis.set_pane_color((1.0, 1.0, 1.0, 1.0))
-    clbr = plt.colorbar(pltmap)
-    clbr.set_ticks([])
-    plt.savefig(out_root_dir + surgery_name + '.pdf')
-
-
+            fig = plt.figure()
+            # plot3d = fig.add_subplot(1,1,try_num+1, projection='3d')
+            plot3d = fig.add_subplot(projection='3d')
+            pltmap = plot3d.scatter(x_head, y_head, z_head,
+                                    c=cas, cmap='jet', s=5, linewidths=0)
+            ax = plt.gca()
+            ax.set_title('try_num:'+str(try_num)+' '+"predicted_label:" + classes[not np.argmax(predicted)]+'\n'+
+                            r'% of Expert is '+f'{predicted[0][0]*100.0:.2f}'+', Novice is '+f'{predicted[0][1]*100.0:.2f}')
+            ax.set_xticklabels([])
+            ax.set_yticklabels([])
+            ax.set_zticklabels([])
+            ax.set_xlabel('x_head')
+            ax.set_ylabel('y_head')
+            ax.set_zlabel('z_head')
+            ax.w_xaxis.set_pane_color((1.0, 1.0, 1.0, 1.0))
+            ax.w_yaxis.set_pane_color((1.0, 1.0, 1.0, 1.0))
+            ax.w_zaxis.set_pane_color((1.0, 1.0, 1.0, 1.0))
+            clbr = plt.colorbar(pltmap)
+            clbr.set_ticks([])
+            # plt.savefig(out_root_dir + surgery_name + '.pdf')
+            pp.savefig(fig)
+        # plt.savefig(out_root_dir + subject +'_level'+mapExpertiseLevelBySurgeryName[surgery_type+'_'+subject+'000']+ '.pdf')
+        pp.close()
+    
 # the sequence variable is the multivariate time series or in this case the surgical task
 # we want to split the inputs in order to train
 def split_input_for_training(sequence):
@@ -610,9 +637,9 @@ def fcn_each_dim_build_model(input_shapes, filters, kernel_size, lr, amsgrad, su
         model.summary()
 
     # choose the optimizer(エラーが出たので、改変)
-    optimizer = keras.optimizers.Adam(lr=lr, amsgrad=amsgrad)
-    # import tensorflow as tf
-    # optimizer=tf.keras.optimizers.Adam(learning_rate=lr,amsgrad=amsgrad)
+    # optimizer = keras.optimizers.Adam(lr=lr, amsgrad=amsgrad)
+    import tensorflow as tf
+    optimizer=tf.keras.optimizers.Adam(learning_rate=lr,amsgrad=amsgrad)
 
     model.compile(loss='categorical_crossentropy', optimizer=optimizer, metrics=['accuracy'])
 
@@ -630,27 +657,12 @@ def modified_fcn_each_dim_build_model(input_shapes, filters, kernel_size, lr, am
     bn1=[None for a in range(0, num_dim_clusters)]
     drop1=[None for a in range(0, num_dim_clusters)]
 
-    # for i in range(0,num_dim_clusters):
-    #     x[i]=keras.layers.Input(input_shapes[0][i])
-    #     conv1[i] = Conv1D(filters=filters, kernel_size=kernel_size, strides=1, padding='same',
-    #                                           activity_regularizer=regularizers.l2(reg))(x[i])
-    #     bn1[i]=keras.layers.normalization.BatchNormalization()(conv1[i])
-    #     conv1[i] = Activation('relu')(bn1[i])
-    #     drop1[i] = Dropout(0.5)(conv1[i])
-    # final_input=keras.layers.Concatenate(axis=-1)(drop1)
-    # conv2 = Conv1D(filters=2 * filters, kernel_size=kernel_size, strides=1, padding='same',
-    #                             activity_regularizer=regularizers.l2(reg))(final_input)
-    # bn2=keras.layers.normalization.BatchNormalization()(conv2)
-    # conv2 = Activation('relu', name="conv_final")(bn2)
-    # drop2 = Dropout(0.5)(conv2)
-
-
     for i in range(0,num_dim_clusters):
         x[i]=keras.layers.Input(input_shapes[0][i])
         conv1[i] = Conv1D(filters=filters, kernel_size=kernel_size, strides=1, padding='same',
                                               activity_regularizer=regularizers.l2(reg))(x[i])
-        bn1[i]=keras.layers.normalization.BatchNormalization()(conv1[i])
-        conv1[i] = Activation('relu')(bn1[i])
+        # bn1[i]=keras.layers.normalization.BatchNormalization()(conv1[i])
+        conv1[i] = Activation('relu')(conv1[i])
         # drop1[i] = Dropout(0.5)(conv1[i])
     final_input=keras.layers.Concatenate(axis=-1)(conv1)
     conv2 = Conv1D(filters=2 * filters, kernel_size=kernel_size, strides=1, padding='same',
@@ -670,9 +682,9 @@ def modified_fcn_each_dim_build_model(input_shapes, filters, kernel_size, lr, am
         model.summary()
 
     # choose the optimizer(エラーが出たので、改変)
-    optimizer = keras.optimizers.Adam(lr=lr, amsgrad=amsgrad)
-    # import tensorflow as tf
-    # optimizer=tf.keras.optimizers.Adam(lr=lr,amsgrad=amsgrad)
+    # optimizer = keras.optimizers.Adam(lr=lr, amsgrad=amsgrad)
+    import tensorflow as tf
+    optimizer=tf.keras.optimizers.Adam(learning_rate=lr,amsgrad=amsgrad)
 
     model.compile(loss='binary_crossentropy', optimizer=optimizer, metrics=['accuracy'])
 
@@ -731,7 +743,7 @@ def attention_lstm_fcn_each_dim_build_model(input_shapes, filters, kernel_size, 
         model.summary()
 
     # choose the optimizer(エラーが出たので、改変)
-    optimizer = keras.optimizers.Adam(lr=lr, amsgrad=amsgrad)
+    optimizer = keras.optimizers.Adam(learning_rate=lr, amsgrad=amsgrad)
     # import tensorflow as tf
     # optimizer=tf.keras.optimizers.Adam(lr=lr,amsgrad=amsgrad)
 
@@ -812,7 +824,7 @@ start_time = time.time()
 root_dir = '../OIL_DATA/'
 path_to_configurations = '../OIL_DATA/Experimental_setup/'
 out_root_dir = '../results/oil_classification/'
-nb_epochs = 10000
+nb_epochs = 3000
 max_iterations = 1
 # dimensions_to_use = range(0, 76)
 mapSurgeryDataBySurgeryName = collections.OrderedDict()  # indexes surgery data (76 dimensions) by surgery name
@@ -822,16 +834,24 @@ mapGesturesBySurgeryName = collections.OrderedDict()  # indexes gestures of a su
 #                 [(None, 3), (None, 9), (None, 3), (None, 3), (None, 1)],
 #                 [(None, 3), (None, 9), (None, 3), (None, 3), (None, 1)],
 #                 [(None, 3), (None, 9), (None, 3), (None, 3), (None, 1)]]
-input_shapes = [[(None, 2), (None, 3),
-                 (None, 3),
-                 (None, 1), (None, 3), (None, 3),
-                 (None, 6),
+
+input_shapes = [[(None, 2), (None, 3), # eye, head
+                 (None, 3), # add angle
+                 (None, 1), (None, 3), (None, 3), # add vel(eye, head, angle)
+                 (None, 6), # add eye*head
                  ]]
+
+# input_shapes = [[(1500, 2), (1500, 3), # eye, head
+#                  (1500, 3), # add angle
+#                  (1500, 1), (1500, 3), (1500, 3), # add vel(eye, head, angle)
+#                  (1500, 6), # add eye*head
+#                  ]]
 dimensions_to_use = range(0, 21)
 print('dimensions_to_use=21')
 # surgery_types = ['Suturing','Knot_Tying','Needle_Passing']
 # surgery_types = ['Suturing']
 surgery_types=['Eyelog']
+classes = ['N', 'E']
 
 
 if (len(sys.argv) > 1):
@@ -855,7 +875,7 @@ else:
         #### hyperparam
         architectures = ['fcn']
         regs = [0.00001]
-        filterss = [8]
+        filterss = [16]
         # filterss=[8]
         kernel_sizes = [3]
         lrs = [0.001]
@@ -863,7 +883,7 @@ else:
         ###############
 
         # classes = ['N', 'I', 'E']
-        classes = ['N', 'E']
+        # classes = ['N', 'E']
         nb_classes = len(classes)
         confusion_matrix = pd.DataFrame(np.zeros(shape=(nb_classes, nb_classes)),
                      index=list(map(lambda str:'pred_'+str,classes)), columns=list(map(lambda str:'true_'+str,classes)))  # matrix used to calculate the OIL_DATA evaluation
