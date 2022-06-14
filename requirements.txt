@@ -1,14 +1,21 @@
-numpy==1.19.5
-Cython==0.29.7
-pandas==0.23.0
-h5py==2.8.0
-Keras==2.2.4
-sklearn==0.0
+# numpy==1.19.5
+# Cython==0.29.7
+# pandas==0.23.0
+# h5py==2.8.0
+# Keras==2.2.4
+# sklearn==0.0
 # matplotlib==1.5.1
-tensorflow==1.12.0
-tensorflow-gpu==1.12.0
-fastprogress==1.0.2
-scikit-image==0.17.2
+# tensorflow==1.12.0
+# tensorflow-gpu==1.12.0
+# fastprogress==1.0.2
+# scikit-image==0.17.2
+
+numpy
+pandas
+matplotlib
+fastprogress
+scikit-learn
+scikit-image
 
 # absl-py==0.6.1
 # alabaster==0.7.7
